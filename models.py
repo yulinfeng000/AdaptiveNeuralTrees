@@ -589,7 +589,7 @@ class VGG13ConvPool(nn.Module):
         self.downsample = downsample        
         self.batch_norm = batch_norm
         self.conv1 = nn.Conv2d(
-            input_nc, ngf, kernel_size=kernel_size, padding=(kernel_size-1)/2,
+            input_nc, ngf, kernel_size=kernel_size, padding=(kernel_size-1)//2,
         )
         self.conv2 = nn.Conv2d(ngf, ngf, kernel_size=kernel_size, padding=1)
         self.relu = nn.ReLU(inplace=True)
@@ -1022,4 +1022,4 @@ class Solver_GAP_OneFClayers(nn.Module):
         x = x.mean(dim=-1).mean(dim=-1).squeeze()  
         x = F.dropout(x, training=self.training, p=self.dropout_prob)
         x = self.fc1(x)
-        return F.log_softmax(x)
+        return F.log_softmax(x,dim=-1)

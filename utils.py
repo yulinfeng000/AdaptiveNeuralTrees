@@ -1,5 +1,6 @@
 """Utility functions"""
 import torch
+from torch.tensor import Tensor
 import torchvision
 import json
 import time
@@ -22,13 +23,14 @@ def define_node(
         args, node_index, level, parent_index, tree_struct, identity=False,
 ):
     """ Define node operations.
-    
+
     In this function, we assume that 3 building blocks of node operations
     i.e. transformer, solver and router are of fixed complexity. 
     """
 
     # define meta information
-    num_transforms = 0 if node_index == 0 else count_number_transforms(parent_index, tree_struct)
+    num_transforms = 0 if node_index == 0 else count_number_transforms(
+        parent_index, tree_struct)
     meta = {'index': node_index,
             'parent': parent_index,
             'left_child': 0,
@@ -47,30 +49,32 @@ def define_node(
             'num_transforms': num_transforms}
 
     # get input shape before transformation
-    if not tree_struct: # if it's first node, then set it to the input data size
-        meta['in_shape'] = (1, args.input_nc, args.input_width, args.input_height)
+    if not tree_struct:  # if it's first node, then set it to the input data size
+        meta['in_shape'] = (
+            1, args.input_nc, args.input_width, args.input_height)
     else:
         meta['in_shape'] = tree_struct[parent_index]['out_shape']
 
     # -------------------------- define transformer ---------------------------
-    # no transformation if the input size is too small. 
+    # no transformation if the input size is too small.
     if meta['in_shape'][2] < 3 or meta['in_shape'][3] < 3:
         identity = True
 
-    if identity or args.transformer_ver==1:
+    if identity or args.transformer_ver == 1:
         meta['transformed'] = False
     else:
         meta['transformed'] = True
 
     # only downsample at the specified frequency:
     # currently assume the initial transform always perform downsampling.
-    num_downsample = 0 if node_index == 0 else count_number_transforms_after_last_downsample(parent_index, tree_struct)
+    num_downsample = 0 if node_index == 0 else count_number_transforms_after_last_downsample(
+        parent_index, tree_struct)
     if args.downsample_interval == num_downsample or node_index == 0:
         meta['downsampled'] = True
     else:
         meta['downsampled'] = False
 
-    # get the transformer version: 
+    # get the transformer version:
     config_t = {'kernel_size': args.transformer_k,
                 'ngf': args.transformer_ngf,
                 'batch_norm': args.batch_norm,
@@ -87,7 +91,7 @@ def define_node(
                                          meta['in_shape'][1], meta['in_shape'][2], meta['in_shape'][3],
                                          **config_t)
     meta['identity'] = identity
-    
+
     # get output shape after transformation:
     meta['out_shape'] = transformer.outputshape
     print('---------------- data shape before/after transformer -------------')
@@ -98,24 +102,24 @@ def define_node(
     config_s = {'no_classes': args.no_classes,
                 'dropout_prob': args.solver_dropout_prob,
                 'batch_norm': args.batch_norm}
-    solver = define_solver(args.solver_ver, 
+    solver = define_solver(args.solver_ver,
                            meta['out_shape'][1], meta['out_shape'][2], meta['out_shape'][3],
                            **config_s)
 
     # ---------------------------- define router ------------------------------
-    config_r = {'kernel_size': args.router_k, 
+    config_r = {'kernel_size': args.router_k,
                 'ngf': args.router_ngf,
                 'soft_decision': True,
                 'stochastic': False,
-                'dropout_prob':args.router_dropout_prob,
+                'dropout_prob': args.router_dropout_prob,
                 'batch_norm': args.batch_norm}
-   
+
     router = define_router(
         args.router_ver,
         meta['out_shape'][1], meta['out_shape'][2], meta['out_shape'][3],
         **config_r)
 
-    # define module: 
+    # define module:
     module = {'transform': transformer,
               'classifier': solver,
               'router': router}
@@ -135,7 +139,8 @@ def define_transformer(version, input_nc, input_width, input_height, **kwargs):
     elif version == 5:  # VGG13: 2 conv layer + 1 max pooling
         return models.VGG13ConvPool(input_nc, input_width, input_height, **kwargs)
     else:
-        raise NotImplementedError("Specified transformer module not available.")
+        raise NotImplementedError(
+            "Specified transformer module not available.")
 
 
 def define_router(version, input_nc, input_width, input_height, **kwargs):
@@ -173,16 +178,16 @@ def define_solver(version, input_nc, input_width, input_height, **kwargs):
 
 
 def get_scheduler(scheduler_type, optimizer, grow):
-    if scheduler_type == 'step_lr': # reduce the learning rate
+    if scheduler_type == 'step_lr':  # reduce the learning rate
         scheduler = optim.lr_scheduler.MultiStepLR(
-            optimizer, milestones=[100,150], gamma=0.1,
+            optimizer, milestones=[100, 150], gamma=0.1,
         )
-    elif scheduler_type == 'plateau': # patience based decay of learning rates
+    elif scheduler_type == 'plateau':  # patience based decay of learning rates
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, 'min', factor=0.1, patience=10,
         )
-    elif scheduler_type == 'hybrid': # hybrid between step_lr and plateau
-        if grow: # use 'plateau' during the local growth phase
+    elif scheduler_type == 'hybrid':  # hybrid between step_lr and plateau
+        if grow:  # use 'plateau' during the local growth phase
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer, 'min', factor=0.1, patience=10,
             )
@@ -216,15 +221,17 @@ def plot_hist_root(labels, split_status, save_as='./figures/hist_labels_split.pn
         belongs to the right and 1 indicates left.
     """
     fig = plt.figure()
-    plt.hist(labels[split_status], bins=range(11), alpha=0.75, label='right branch')
-    plt.hist(labels[split_status==False], bins=range(11), alpha=0.5, label='left branch')
+    plt.hist(labels[split_status], bins=range(
+        11), alpha=0.75, label='right branch')
+    plt.hist(labels[split_status == False], bins=range(
+        11), alpha=0.5, label='left branch')
     plt.legend(loc='upper right')
     print('save the histogram as ' + save_as)
     fig.savefig(save_as)
 
 
 # Use to visualise performance of one model:
-def print_performance(jasonfile, model_name='model_1', figsize=(5,5)) :
+def print_performance(jasonfile, model_name='model_1', figsize=(5, 5)):
     """ Inspect performance of a single model
     """
     records = json.load(open(jasonfile, 'r'))
@@ -232,19 +239,19 @@ def print_performance(jasonfile, model_name='model_1', figsize=(5,5)) :
     print("        train_best_loss: {}".format(records['train_best_loss']))
     print("        valid_best_loss: {}".format(records['valid_best_loss']))
     print("        test_best_loss: {}".format(records['test_best_loss']))
-    
+
     # Plot train/test loss
     fig = plt.figure(figsize=figsize)
     plt.plot(np.arange(len(records['test_epoch_loss'])), np.array(records['test_epoch_loss']),
-             linestyle='-.', color='b', label='test epoch loss')     
-    plt.plot(np.arange(len(records['train_epoch_loss']), dtype=float), np.array(records['train_epoch_loss']), 
+             linestyle='-.', color='b', label='test epoch loss')
+    plt.plot(np.arange(len(records['train_epoch_loss']), dtype=float), np.array(records['train_epoch_loss']),
              color='r', linestyle='-', label='train epoch loss')
     plt.legend(loc='upper right')
     plt.ylabel('epoch wise loss (average CE loss)')
     plt.xlabel('epoch number')
-    
 
-def plot_performance(jasonfiles, model_names=[], figsize=(5,5), title='') :
+
+def plot_performance(jasonfiles, model_names=[], figsize=(5, 5), title=''):
     """ Visualise the results for several models
 
     Args:
@@ -259,21 +266,21 @@ def plot_performance(jasonfiles, model_names=[], figsize=(5,5), title='') :
         model_names = [str(i) for i in range(len(jasonfiles))]
 
     for i, f in enumerate(jasonfiles):
-        # load the information: 
+        # load the information:
         records = json.load(open(f, 'r'))
-        
+
         # Plot train/test loss
         plt.plot(np.arange(len(records['test_epoch_loss'])), np.array(records['test_epoch_loss']),
-                 color=color[i], linestyle='-.', label='test epoch loss: ' + model_names[i] )     
-        plt.plot(np.arange(len(records['train_epoch_loss']), dtype=float), np.array(records['train_epoch_loss']), 
-                 color=color[i], linestyle='-', label='train epoch loss: '  + model_names[i])
+                 color=color[i], linestyle='-.', label='test epoch loss: ' + model_names[i])
+        plt.plot(np.arange(len(records['train_epoch_loss']), dtype=float), np.array(records['train_epoch_loss']),
+                 color=color[i], linestyle='-', label='train epoch loss: ' + model_names[i])
     plt.ylabel('epoch wise loss (average CE loss)')
     plt.xlabel('epoch number')
     plt.legend(loc='upper right')
     plt.title(title)
 
 
-def plot_accuracy(jasonfiles, model_names=[], figsize=(5,5), ymax=100.0, title=''):
+def plot_accuracy(jasonfiles, model_names=[], figsize=(5, 5), ymax=100.0, title=''):
     fig = plt.figure(figsize=figsize)
     color = ['b', 'g', 'r', 'c', 'm', 'y', 'k', 'w']
 
@@ -281,9 +288,9 @@ def plot_accuracy(jasonfiles, model_names=[], figsize=(5,5), ymax=100.0, title='
         model_names = [str(i) for i in range(len(jasonfiles))]
 
     for i, f in enumerate(jasonfiles):
-        # load the information: 
+        # load the information:
         records = json.load(open(f, 'r'))
-        
+
         # Plot train/test loss
         plt.plot(
             np.arange(len(records['test_epoch_accuracy']), dtype=float),
@@ -294,12 +301,13 @@ def plot_accuracy(jasonfiles, model_names=[], figsize=(5,5), ymax=100.0, title='
         plt.ylabel('test accuracy (%)')
         plt.xlabel('epoch number')
         plt.ylim(ymax=ymax)
-        print(model_names[i] + ': accuracy = {}'.format(max(records['test_epoch_accuracy'])))
+        print(
+            model_names[i] + ': accuracy = {}'.format(max(records['test_epoch_accuracy'])))
     plt.legend(loc='lower right')
     plt.title(title)
 
 
-def compute_error(model_file, data_loader, cuda_on=False, name = ''):
+def compute_error(model_file, data_loader, cuda_on=False, name=''):
     """Load a model and compute errors on a held-out dataset
     Args:
         model_file (str): model parameters
@@ -310,7 +318,7 @@ def compute_error(model_file, data_loader, cuda_on=False, name = ''):
     if cuda_on:
         model.cuda()
 
-    # compute the error 
+    # compute the error
     model.eval()
     test_loss = 0
     correct = 0
@@ -364,9 +372,9 @@ def load_tree_model(model_file, cuda_on=False,
 
 def compute_error_general(model_file, data_loader, cuda_on=False,
                           soft_decision=True, stochastic=False,
-                          breadth_first=False, fast = False,
+                          breadth_first=False, fast=False,
                           task="classification",
-                          name = ''):
+                          name=''):
     """Load a model and perform stochastic inferenc
     Args:
         model_file (str): model parameters
@@ -389,7 +397,7 @@ def compute_error_general(model_file, data_loader, cuda_on=False,
 
     for node_meta in tree_struct:
         if not('extended' in node_meta.keys()):
-            node_meta['extended']=False
+            node_meta['extended'] = False
 
     if task == "classification":
         model = models.Tree(
@@ -401,7 +409,7 @@ def compute_error_general(model_file, data_loader, cuda_on=False,
     if cuda_on:
         model.cuda()
 
-    # compute the error 
+    # compute the error
     model.eval()
     test_loss = 0
     correct = 0
@@ -409,7 +417,7 @@ def compute_error_general(model_file, data_loader, cuda_on=False,
         if cuda_on:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data, volatile=True), Variable(target)
-        
+
         if fast:
             output = model.fast_forward_BF(data)
         else:
@@ -435,9 +443,9 @@ def compute_error_general(model_file, data_loader, cuda_on=False,
 
 def compute_error_general_ensemble(model_file_list, data_loader, cuda_on=False,
                                    soft_decision=True, stochastic=False,
-                                   breadth_first=False, fast = False,
+                                   breadth_first=False, fast=False,
                                    task="classification",
-                                   name = ''):
+                                   name=''):
     """Load an ensemble of models and compute the average prediction. """
 
     # load the model and set routers stochastic.
@@ -456,7 +464,7 @@ def compute_error_general_ensemble(model_file_list, data_loader, cuda_on=False,
 
         for node_meta in tree_struct:
             if not('extended' in node_meta.keys()):
-                node_meta['extended']=False
+                node_meta['extended'] = False
 
         if task == "classification":
             model = models.Tree(
@@ -519,16 +527,22 @@ def try_different_inference_methods(
     if dataset == 'cifar10':
         if augmentation_on:
             transform_test = transforms.Compose([transforms.ToTensor(),
-                                                    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
+                                                 transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
         else:
-            transform_test = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+            transform_test = transforms.Compose(
+                [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-        cifar10_test = torchvision.datasets.CIFAR10(root='../../data', train=False, download=True, transform=transform_test)
-        test_loader = torch.utils.data.DataLoader(cifar10_test, batch_size=100, shuffle=False, num_workers = 2)
+        cifar10_test = torchvision.datasets.CIFAR10(
+            root='../../data', train=False, download=True, transform=transform_test)
+        test_loader = torch.utils.data.DataLoader(
+            cifar10_test, batch_size=100, shuffle=False, num_workers=2)
     elif dataset == 'mnist':
-        transform_test = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-        mnist_test = datasets.MNIST('../../data', train=False, transform=transform_test)
-        test_loader = torch.utils.data.DataLoader(mnist_test, batch_size=100, shuffle=False, num_workers=2)
+        transform_test = transforms.Compose(
+            [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
+        mnist_test = datasets.MNIST(
+            '../../data', train=False, transform=transform_test)
+        test_loader = torch.utils.data.DataLoader(
+            mnist_test, batch_size=100, shuffle=False, num_workers=2)
     else:
         raise NotImplementedError("The specified dataset is not supported")
 
@@ -622,20 +636,21 @@ def try_different_inference_methods_ensemble(
 # --------------------- Parameter counters  -------------------------
 def get_total_number_of_params(model, print_on=False):
     tree_struct = model.tree_struct
-    
+
     names, params = [], []
     for node_idx, node_meta in enumerate(tree_struct):
         for name, param in model.named_parameters():
-            if (( not(node_meta['is_leaf']) and '.'+str(node_idx)+'.router' in name) \
-            or ('.'+str(node_idx)+'.transform' in name) \
-            or (node_meta['is_leaf'] and '.'+str(node_idx)+'.classifier' in name)):
+            if ((not(node_meta['is_leaf']) and '.'+str(node_idx)+'.router' in name)
+                or ('.'+str(node_idx)+'.transform' in name)
+                    or (node_meta['is_leaf'] and '.'+str(node_idx)+'.classifier' in name)):
                 names.append(name)
                 params.append(param)
-                
+
     if print_on:
-        print("Count the number of parameters below: ")          
-        for name in names: print('          '+name)
-            
+        print("Count the number of parameters below: ")
+        for name in names:
+            print('          '+name)
+
     return sum(p.numel() for p in params)
 
 
@@ -646,30 +661,31 @@ def get_number_of_params_path(
     if include_routers:
         for name, param in model.named_parameters():
             if '.'+str(nodes[-1])+'.classifier' in name \
-            or any(['.'+str(node)+'.transform' in name for node in nodes]) \
-            or any(['.'+str(node)+'.router' in name for node in nodes[:-1]]):
+                    or any(['.'+str(node)+'.transform' in name for node in nodes]) \
+                    or any(['.'+str(node)+'.router' in name for node in nodes[:-1]]):
                 names.append(name)
                 params.append(param)
     else:
         for name, param in model.named_parameters():
             if '.' + str(nodes[-1]) + '.classifier' in name \
-            or any(['.' + str(node) + '.transform' in name for node in nodes]):
+                    or any(['.' + str(node) + '.transform' in name for node in nodes]):
                 names.append(name)
                 params.append(param)
 
     if print_on:
-        print("\nCount the number of parameters below: ")          
-        for name in names: print('          '+name)
-    
+        print("\nCount the number of parameters below: ")
+        for name in names:
+            print('          '+name)
+
     return sum(p.numel() for p in params)
 
 
 def get_number_of_params_summary(
         model, name='', print_on=True, include_routers=True,
 ):
-    # compute the total number 
+    # compute the total number
     total_num = get_total_number_of_params(model)
-    
+
     # compute min,max,mean number of parameters per branch
     paths_list = model.paths_list
     num_list = []
@@ -678,15 +694,16 @@ def get_number_of_params_summary(
             model, nodes, include_routers=include_routers,
         )
         num_list.append(num)
-    
+
     if print_on:
         print('\n' + name)
         print('Number of parameters summary:')
         print('    Total: {} '.format(total_num))
         print('    Max per branch: {} '.format(max(num_list)))
         print('    Min per branch: {} '.format(min(num_list)))
-        print('    Average per branch: {}'.format(sum(num_list)*1.0/len(num_list)))
-    
+        print('    Average per branch: {}'.format(
+            sum(num_list)*1.0/len(num_list)))
+
     return total_num, max(num_list), min(num_list), sum(num_list)*1.0/len(num_list)
 
 
@@ -714,3 +731,15 @@ def set_random_seed(seed, cuda):
         torch.cuda.manual_seed_all(seed)  # pytorch gpu vars
         torch.backends.cudnn.deterministic = True   # needed
         torch.backends.cudnn.benchmark = False
+
+
+class TensorJsonEncoder(json.JSONEncoder):
+    """Tensor类JSON序列化器"""
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, bytes):
+            return str(obj, encoding='utf-8')
+        elif isinstance(obj, Tensor):
+            return obj.cpu().numpy()
+        return json.JSONEncoder.default(self, obj)

@@ -1,4 +1,7 @@
 *.pyc
 experiments/
 notebooks/
-
+.python-version
+.vscode
+notebooks/.ipynb_checkpoints/example_mnist-checkpoint.ipynb
+.DS_Store

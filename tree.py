@@ -2,6 +2,12 @@
 Main script for training an adaptive neural tree (ANT).
 """
 from __future__ import print_function
+from torch.utils.data import DataLoader
+from visualisation import visualise_routers_behaviours
+from utils import TensorJsonEncoder, define_node, get_scheduler, set_random_seed
+from ops import get_params_node
+from models import Tree, One
+from data import get_dataloaders, get_dataset_details
 import argparse
 import os
 import sys
@@ -10,70 +16,98 @@ import time
 import numpy as np
 
 import torch
-from torch.autograd import Variable
+# from torch.autograd import Variable
 import torch.nn.functional as F
 from torch import optim
 
 import matplotlib
 matplotlib.use('agg')
 
-from data import get_dataloaders, get_dataset_details
-from models import Tree, One
-from ops import get_params_node
-from utils import define_node, get_scheduler, set_random_seed
-from visualisation import visualise_routers_behaviours
-
 
 # Experiment settings
 parser = argparse.ArgumentParser(description='Adaptive Neural Trees')
-parser.add_argument('--experiment', '-e', dest='experiment', default='tree', help='experiment name')
-parser.add_argument('--subexperiment','-sube', dest='subexperiment', default='', help='experiment name')
+parser.add_argument('--experiment', '-e', dest='experiment',
+                    default='tree', help='experiment name')
+parser.add_argument('--subexperiment', '-sube',
+                    dest='subexperiment', default='', help='experiment name')
 
 parser.add_argument('--dataset', default='mnist', help='dataset type')
-parser.add_argument('--no-cuda', action='store_true', default=False, help='disables CUDA training')
+parser.add_argument('--no-cuda', action='store_true',
+                    default=False, help='disables CUDA training')
 parser.add_argument('--gpu', type=str, default="", help='which GPU to use')
-parser.add_argument('--seed', type=int, default=0, metavar='S', help='random seed')
-parser.add_argument('--num_workers', type=int, default=0, metavar='N', help='number of threads for data-loader')
+parser.add_argument('--seed', type=int, default=0,
+                    metavar='S', help='random seed')
+parser.add_argument('--num_workers', type=int, default=0,
+                    metavar='N', help='number of threads for data-loader')
 
 # Optimization settings:
-parser.add_argument('--batch-size', type=int, default=256, metavar='N', help='input batch size for training')
-parser.add_argument('--log-interval', type=int, default=10, metavar='N', help='how many batches to wait before logging training status')
-parser.add_argument('--augmentation_on', action='store_true', default=False, help='perform data augmentation')
-parser.add_argument('--lr', type=float, default=0.001, metavar='LR', help='learning rate')
-parser.add_argument('--scheduler', type=str, default="", help='learning rate scheduler')
-parser.add_argument('--momentum', type=float, default=0.5, metavar='M', help='SGD momentum')
-parser.add_argument('--valid_ratio', '-vr', dest='valid_ratio', type=float, default=0.1, metavar='LR', help='validation set ratio')
+parser.add_argument('--batch-size', type=int, default=256,
+                    metavar='N', help='input batch size for training')
+parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+                    help='how many batches to wait before logging training status')
+parser.add_argument('--augmentation_on', action='store_true',
+                    default=False, help='perform data augmentation')
+parser.add_argument('--lr', type=float, default=0.001,
+                    metavar='LR', help='learning rate')
+parser.add_argument('--scheduler', type=str, default="",
+                    help='learning rate scheduler')
+parser.add_argument('--momentum', type=float, default=0.5,
+                    metavar='M', help='SGD momentum')
+parser.add_argument('--valid_ratio', '-vr', dest='valid_ratio',
+                    type=float, default=0.1, metavar='LR', help='validation set ratio')
 
-parser.add_argument('--criteria', default='avg_valid_loss', help='growth criteria')
-parser.add_argument('--epochs_node', type=int, default=50, metavar='N', help='max number of epochs to train per node during the growth phase')
-parser.add_argument('--epochs_finetune', type=int, default=100, metavar='N', help='number of epochs for the refinement phase')
-parser.add_argument('--epochs_patience', type=int, default=5, metavar='N', help='number of epochs to be waited without improvement at each node during the growth phase')
-parser.add_argument('--maxdepth', type=int, default=10, help='maximum depth of tree')
-parser.add_argument('--finetune_during_growth', action='store_true', default=False, help='refine the tree globally during the growth phase')
-parser.add_argument('--epochs_finetune_node', type=int, default=1, metavar='N', help='number of epochs to perform global refinement at each node during the growth phase')
+parser.add_argument('--criteria', default='avg_valid_loss',
+                    help='growth criteria')
+parser.add_argument('--epochs_node', type=int, default=50, metavar='N',
+                    help='max number of epochs to train per node during the growth phase')
+parser.add_argument('--epochs_finetune', type=int, default=100,
+                    metavar='N', help='number of epochs for the refinement phase')
+parser.add_argument('--epochs_patience', type=int, default=5, metavar='N',
+                    help='number of epochs to be waited without improvement at each node during the growth phase')
+parser.add_argument('--maxdepth', type=int, default=10,
+                    help='maximum depth of tree')
+parser.add_argument('--finetune_during_growth', action='store_true',
+                    default=False, help='refine the tree globally during the growth phase')
+parser.add_argument('--epochs_finetune_node', type=int, default=1, metavar='N',
+                    help='number of epochs to perform global refinement at each node during the growth phase')
 
 
 # Solver, router and transformer modules:
-parser.add_argument('--router_ver', '-r_ver', dest='router_ver', type=int, default=1, help='default router version')
-parser.add_argument('--router_ngf', '-r_ngf', dest='router_ngf', type=int, default=1, help='number of feature maps in routing function')
-parser.add_argument('--router_k', '-r_k', dest='router_k', type=int, default=28, help='kernel size in routing function')
-parser.add_argument('--router_dropout_prob', '-r_drop', dest='router_dropout_prob', type=float, default=0.0, help='drop-out probabilities for router modules.')
+parser.add_argument('--router_ver', '-r_ver', dest='router_ver',
+                    type=int, default=1, help='default router version')
+parser.add_argument('--router_ngf', '-r_ngf', dest='router_ngf', type=int,
+                    default=1, help='number of feature maps in routing function')
+parser.add_argument('--router_k', '-r_k', dest='router_k',
+                    type=int, default=28, help='kernel size in routing function')
+parser.add_argument('--router_dropout_prob', '-r_drop', dest='router_dropout_prob',
+                    type=float, default=0.0, help='drop-out probabilities for router modules.')
 
-parser.add_argument('--transformer_ver', '-t_ver', dest='transformer_ver', type=int, default=1, help='default transformer version: identity')
-parser.add_argument('--transformer_ngf', '-t_ngf', dest='transformer_ngf', type=int, default=3, help='number of feature maps in residual transformer')
-parser.add_argument('--transformer_k', '-t_k', dest='transformer_k', type=int, default=5, help='kernel size in transfomer function')
-parser.add_argument('--transformer_expansion_rate', '-t_expr', dest='transformer_expansion_rate', type=int, default=1, help='default transformer expansion rate')
-parser.add_argument('--transformer_reduction_rate', '-t_redr', dest='transformer_reduction_rate', type=int, default=2, help='default transformer reduction rate')
+parser.add_argument('--transformer_ver', '-t_ver', dest='transformer_ver',
+                    type=int, default=1, help='default transformer version: identity')
+parser.add_argument('--transformer_ngf', '-t_ngf', dest='transformer_ngf',
+                    type=int, default=3, help='number of feature maps in residual transformer')
+parser.add_argument('--transformer_k', '-t_k', dest='transformer_k',
+                    type=int, default=5, help='kernel size in transfomer function')
+parser.add_argument('--transformer_expansion_rate', '-t_expr', dest='transformer_expansion_rate',
+                    type=int, default=1, help='default transformer expansion rate')
+parser.add_argument('--transformer_reduction_rate', '-t_redr', dest='transformer_reduction_rate',
+                    type=int, default=2, help='default transformer reduction rate')
 
-parser.add_argument('--solver_ver', '-s_ver', dest='solver_ver', type=int, default=1, help='default router version')
-parser.add_argument('--solver_inherit', '-s_inh', dest='solver_inherit',  action='store_true', help='inherit the parameters of the solver when defining two new ones for splitting a node')
-parser.add_argument('--solver_dropout_prob', '-s_drop', dest='solver_dropout_prob', type=float, default=0.0, help='drop-out probabilities for solver modules.')
+parser.add_argument('--solver_ver', '-s_ver', dest='solver_ver',
+                    type=int, default=1, help='default router version')
+parser.add_argument('--solver_inherit', '-s_inh', dest='solver_inherit',  action='store_true',
+                    help='inherit the parameters of the solver when defining two new ones for splitting a node')
+parser.add_argument('--solver_dropout_prob', '-s_drop', dest='solver_dropout_prob',
+                    type=float, default=0.0, help='drop-out probabilities for solver modules.')
 
-parser.add_argument('--downsample_interval', '-ds_int', dest='downsample_interval', type=int, default=0, help='interval between two downsampling operations via transformers i.e. 0 = downsample at every transformer')
-parser.add_argument('--batch_norm', '-bn', dest='batch_norm', action='store_true', default=False, help='turn batch norm on')
+parser.add_argument('--downsample_interval', '-ds_int', dest='downsample_interval', type=int, default=0,
+                    help='interval between two downsampling operations via transformers i.e. 0 = downsample at every transformer')
+parser.add_argument('--batch_norm', '-bn', dest='batch_norm',
+                    action='store_true', default=False, help='turn batch norm on')
 
 # Visualisation:
-parser.add_argument('--visualise_split', action='store_true', help='visuliase how the test dist is split by the routing function')
+parser.add_argument('--visualise_split', action='store_true',
+                    help='visuliase how the test dist is split by the routing function')
 
 args = parser.parse_args()
 
@@ -116,13 +150,16 @@ train_loader, valid_loader, test_loader, NUM_TRAIN, NUM_VALID = get_dataloaders(
     args.dataset, args.batch_size, args.augmentation_on,
     cuda=args.cuda, num_workers=args.num_workers,
 )
+train_loader: DataLoader
+valid_loader: DataLoader
+test_loader: DataLoader
 args.input_nc, args.input_width, args.input_height, args.classes = \
     get_dataset_details(args.dataset)
 args.no_classes = len(args.classes)
 
 
 # -----------------------------  Components ----------------------------------
-def train(model, data_loader, optimizer, node_idx):
+def train(model, data_loader: DataLoader, optimizer, node_idx):
     """ Train step"""
     model.train()
     train_loss = 0
@@ -134,12 +171,16 @@ def train(model, data_loader, optimizer, node_idx):
         optimizer.zero_grad()
         if args.cuda:
             x, y = x.cuda(), y.cuda()
-        x, y = Variable(x), Variable(y)
+        # x,y = Variable(x),Variable(y)
+        # x, y = torch.tensor(x), torch.tensor(y)
         y_pred, p_out = model(x)
 
         loss = F.nll_loss(y_pred, y)
-        train_epoch_loss += loss.data[0] * y.size(0)
-        train_loss += loss.data[0] * y.size(0)
+        # !replace by torch api change
+        # train_epoch_loss += loss.data[0] * y.size(0)
+        # train_loss += loss.data[0] * y.size(0)
+        train_epoch_loss += loss.item() * y.size(0)
+        train_loss += loss.item() * y.size(0)
         loss.backward()
         optimizer.step()
 
@@ -154,8 +195,8 @@ def train(model, data_loader, optimizer, node_idx):
 
             sys.stdout.flush()
             sys.stdout.write('\t      [{}/{} ({:.0f}%)]      Loss: {:.6f} \r'.
-                    format(batch_idx*len(x), NUM_TRAIN,
-                    100. * batch_idx / NUM_TRAIN, train_loss))
+                             format(batch_idx*len(x), NUM_TRAIN,
+                                    100. * batch_idx / NUM_TRAIN, train_loss))
 
             train_loss = 0
             no_points = 0
@@ -178,13 +219,14 @@ def valid(model, data_loader, node_idx, struct):
     for data, target in data_loader:
         if args.cuda:
             data, target = data.cuda(), target.cuda()
-        data, target = Variable(data, volatile=True), Variable(target)
+        # data, target = Variable(data, volatile=True), Variable(target)
+        # data , target = torch.tensor(data),torch.tensor(target)
         output = model(data)
 
         # sum up batch loss
         valid_epoch_loss += F.nll_loss(
             output, target, size_average=False,
-        ).data[0]
+        ).item()
 
         pred = output.data.max(1, keepdim=True)[1]
         correct += pred.eq(target.data.view_as(pred)).cpu().sum()
@@ -253,9 +295,11 @@ def test(model, data_loader):
     for data, target in data_loader:
         if args.cuda:
             data, target = data.cuda(), target.cuda()
-        data, target = Variable(data, volatile=True), Variable(target)
+        # data, target = Variable(data, volatile=True), Variable(target)
+        # data, target = torch.tensor(data), torch.tensor(target)
         output = model(data)
-        test_loss += F.nll_loss(output, target, size_average=False).data[0]
+        # test_loss += F.nll_loss(output, target, size_average=False).data[0]
+        test_loss += F.nll_loss(output, target, size_average=False).item()
         pred = output.data.max(1, keepdim=True)[1]
         correct += pred.eq(target.data.view_as(pred)).cpu().sum()
 
@@ -292,24 +336,28 @@ def _load_checkpoint(model_file_name):
 
 def checkpoint_model(model_file_name, struct=None, modules=None, model=None, figname='hist.png', data_loader=None):
     if not(os.path.exists(os.path.join("./experiments", args.dataset, args.experiment, args.subexperiment))):
-        os.makedirs(os.path.join("./experiments", args.dataset, args.experiment, args.subexperiment, 'figures'))
-        os.makedirs(os.path.join("./experiments", args.dataset, args.experiment, args.subexperiment, 'checkpoints'))
-    
-    # If model is not given, then build one. 
+        os.makedirs(os.path.join("./experiments", args.dataset,
+                    args.experiment, args.subexperiment, 'figures'))
+        os.makedirs(os.path.join("./experiments", args.dataset,
+                    args.experiment, args.subexperiment, 'checkpoints'))
+
+    # If model is not given, then build one.
     if not(model) and modules and struct:
         model = Tree(struct, modules, cuda_on=args.cuda)
-        
+
     # save the model:
-    save_dir = "./experiments/{}/{}/{}/{}".format(args.dataset, args.experiment, args.subexperiment, 'checkpoints')
+    save_dir = "./experiments/{}/{}/{}/{}".format(
+        args.dataset, args.experiment, args.subexperiment, 'checkpoints')
     model_path = save_dir + '/' + model_file_name
     torch.save(model, model_path)
     print("Model saved to {}".format(model_path))
 
     # save tree histograms:
     if args.visualise_split and not(data_loader is None):
-        save_hist_dir = "./experiments/{}/{}/{}/{}".format(args.dataset, args.experiment, args.subexperiment, 'figures')
-        visualise_routers_behaviours(model, data_loader, fig_scale=6, axis_font=20, subtitle_font=20, 
-                                     cuda_on=args.cuda, objects=args.classes, plot_on=False, 
+        save_hist_dir = "./experiments/{}/{}/{}/{}".format(
+            args.dataset, args.experiment, args.subexperiment, 'figures')
+        visualise_routers_behaviours(model, data_loader, fig_scale=6, axis_font=20, subtitle_font=20,
+                                     cuda_on=args.cuda, objects=args.classes, plot_on=False,
                                      save_as=save_hist_dir + '/' + figname)
 
 
@@ -322,11 +370,14 @@ def checkpoint_msc(struct, data_dict):
         data_dict (dict) : data about the experiment (e.g. loss, configurations)
     """
     if not(os.path.exists(os.path.join("./experiments", args.dataset, args.experiment, args.subexperiment))):
-        os.makedirs(os.path.join("./experiments", args.dataset, args.experiment, args.subexperiment, 'figures'))
-        os.makedirs(os.path.join("./experiments", args.dataset, args.experiment, args.subexperiment, 'checkpoints'))
+        os.makedirs(os.path.join("./experiments", args.dataset,
+                    args.experiment, args.subexperiment, 'figures'))
+        os.makedirs(os.path.join("./experiments", args.dataset,
+                    args.experiment, args.subexperiment, 'checkpoints'))
 
     # save the tree structures as a json file:
-    save_dir = "./experiments/{}/{}/{}/{}".format(args.dataset,args.experiment,args.subexperiment,'checkpoints')
+    save_dir = "./experiments/{}/{}/{}/{}".format(
+        args.dataset, args.experiment, args.subexperiment, 'checkpoints')
     struct_path = save_dir + "/tree_structures.json"
     with open(struct_path, 'w') as f:
         json.dump(struct, f)
@@ -335,7 +386,7 @@ def checkpoint_msc(struct, data_dict):
     # save the dictionary as jason file:
     dict_path = save_dir + "/records.json"
     with open(dict_path, 'w') as f_d:
-        json.dump(data_dict, f_d)
+        json.dump(data_dict, f_d, cls=TensorJsonEncoder)
     print("Other data saved to {}".format(dict_path))
 
 
@@ -361,12 +412,14 @@ def get_decision(criteria, node_idx, tree_struct):
             return 'split'
     elif criteria == 'avg_valid_loss':
         if tree_struct[node_idx]['valid_accuracy_gain_ext'] > tree_struct[node_idx]['valid_accuracy_gain_split'] and \
-                        tree_struct[node_idx]['valid_accuracy_gain_ext'] > 0.0:
-            print("Average valid loss is reduced by {} ".format(tree_struct[node_idx]['valid_accuracy_gain_ext']))
+                tree_struct[node_idx]['valid_accuracy_gain_ext'] > 0.0:
+            print("Average valid loss is reduced by {} ".format(
+                tree_struct[node_idx]['valid_accuracy_gain_ext']))
             return 'extend'
 
         elif tree_struct[node_idx]['valid_accuracy_gain_split'] > 0.0:
-            print("Average valid loss is reduced by {} ".format(tree_struct[node_idx]['valid_accuracy_gain_split']))
+            print("Average valid loss is reduced by {} ".format(
+                tree_struct[node_idx]['valid_accuracy_gain_split']))
             return 'split'
 
         else:
@@ -422,13 +475,13 @@ def optimize_fixed_tree(
         scheduler = get_scheduler(args.scheduler, optimizer, grow)
 
     # monitor nodewise best valid loss:
-    if not(not(grow) and node_idx==0) and len(records['valid_best_loss_nodes']) == node_idx:
+    if not(not(grow) and node_idx == 0) and len(records['valid_best_loss_nodes']) == node_idx:
         records['valid_best_loss_nodes'].append(np.inf)
-    
-    if not(not(grow) and node_idx==0) and len(records['valid_best_loss_nodes_split']) == node_idx:
+
+    if not(not(grow) and node_idx == 0) and len(records['valid_best_loss_nodes_split']) == node_idx:
         records['valid_best_loss_nodes_split'].append(np.inf)
 
-    if not(not(grow) and node_idx==0) and len(records['valid_best_loss_nodes_ext']) == node_idx:
+    if not(not(grow) and node_idx == 0) and len(records['valid_best_loss_nodes_ext']) == node_idx:
         records['valid_best_loss_nodes_ext'].append(np.inf)
 
     # start training
@@ -438,27 +491,27 @@ def optimize_fixed_tree(
 
     for epoch in range(1, no_epochs + 1):
         print("\n----- Layer {}, Node {}, Epoch {}/{}, Patience {}/{}---------".
-              format(tree_struct[node_idx]['level'], node_idx, 
+              format(tree_struct[node_idx]['level'], node_idx,
                      epoch, no_epochs, patience_cnt, args.epochs_patience))
         train(model, train_loader, optimizer, node_idx)
         valid_loss_new = valid(model, valid_loader, node_idx, tree_struct)
-        
+
         # learning rate scheduling:
         if args.scheduler == 'plateau':
             scheduler.step(valid_loss_new)
         elif args.scheduler == 'step_lr':
             scheduler.step()
-        
+
         test(model, test_loader)
 
         if not((valid_loss-valid_loss_new) > min_improvement) and grow:
             patience_cnt += 1
         valid_loss = valid_loss_new*1.0
-        
+
         if patience_cnt > args.epochs_patience > 0:
             print('Early stopping')
             break
- 
+
     # load the node-wise best model based on validation accuracy:
     if no_epochs > 0 and grow:
         if model.extend:
@@ -623,7 +676,7 @@ def grow_ant_nodewise():
                 else:
                     print('No extension as '
                           'the transformer is an identity function.')
-                
+
                 # ---------- Decide whether to split, extend or keep -----------
                 criteria = get_decision(args.criteria, node_idx, tree_struct)
 
@@ -680,12 +733,12 @@ def grow_ant_nodewise():
                 # global refinement prior to the next growth
                 # NOTE: this is an option not included in the paper.
                 if args.finetune_during_growth and (criteria == 1 or criteria == 2):
-                    print("\n-------------- Global refinement --------------")   
+                    print("\n-------------- Global refinement --------------")
                     model = Tree(tree_struct, tree_modules,
                                  split=False, node_split=last_node,
                                  extend=False, node_extend=last_node,
                                  cuda_on=args.cuda)
-                    if args.cuda: 
+                    if args.cuda:
                         model.cuda()
 
                     model, tree_modules = optimize_fixed_tree(
@@ -694,7 +747,8 @@ def grow_ant_nodewise():
                         args.epochs_finetune_node, node_idx,
                     )
         # terminate the tree growth if no split or extend in the final layer
-        if not change: break
+        if not change:
+            break
 
     # ############### 2: Refinement (finetuning) phase starts #################
     print("\n\n------------------- Fine-tuning the tree --------------------")
@@ -706,7 +760,7 @@ def grow_ant_nodewise():
                  extend=False,
                  node_extend=last_node, child_extension=None,
                  cuda_on=args.cuda)
-    if args.cuda: 
+    if args.cuda:
         model.cuda()
 
     model, tree_modules = optimize_fixed_tree(model, tree_struct,
