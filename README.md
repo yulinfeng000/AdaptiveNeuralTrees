@@ -1,5 +1,11 @@
 # Adaptive Neural Trees
 
+# Upgrade
+  - Upgrade to Python 3.7+
+  - Upgrade torch 1.3.1+
+  - Add start.sh 
+  - Prepare GPU memory 10G+
+
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 
 This repository contains our PyTorch implementation of Adaptive Neural Trees (ANTs).
